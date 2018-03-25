@@ -1,11 +1,14 @@
 import os
 import keras
 
-import model_modify as modi
-import model_train_and_test as trte
-
 from keras.layers.convolutional import Conv2D
 from termcolor import cprint
+from keras.utils import multi_gpu_model
+from keras.backend.tensorflow_backend import set_session
+import tensorflow as tf
+
+from model_modify import cluster_model_kernels, modify_model, save_cluster_result, load_cluster_result
+from model_train_and_test import evaluate_model, fine_tune_model
 
 from resnet50 import ResNet50
 
@@ -21,27 +24,34 @@ def print_conv_layer_info(model):
     f.close()
 
 def main():
-    os.environ['CUDA_VISIBLE_DEVICES'] = '3'
-    model = ResNet50(include_top=True, weights='imagenet')
-    #model.summary()
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+    #config = tf.ConfigProto()
+    #config.gpu_options.per_process_gpu_memory_fraction = 0.8
+    #set_session(tf.Session(config=config))
 
-    modi.pair_layers_num = 16
-    trte.pair_layers_num=modi.pair_layers_num
-    kmeans_k=1024
+    model = ResNet50(include_top=True, weights='imagenet')
+    #model = multi_gpu_model(model, 2)
+    #model.summary()
+    model.load_weights("./weights/resnet50_73_69.h5")
 
     keras.utils.plot_model(model, to_file="./tmp/resnet50.png")
     print_conv_layer_info(model)
+    #evaluate_model(model)
 
-    #img_path = "/data1/datasets/imageNet/ILSVRC2016/ILSVRC/Data/CLS-LOC/train/n03884397/n03884397_993.JPEG"
-    #trte.evaluate_model1(model, img_path)
+    kmeans_k = 1024
+    file = "./tmp/resnet50_" + str(kmeans_k)
 
+    #cluster_id, temp_kernels = cluster_model_kernels(model, k=kmeans_k, t=1)
+    #save_cluster_result(cluster_id, temp_kernels, file)
+    cluster_id, temp_kernels = load_cluster_result(file)
 
-    file = "./tmp/resnet50_" + str(kmeans_k) + "_" + str(modi.pair_layers_num)
-    modi.modify_model(model, k=kmeans_k,file_save = file)
-    #modi.load_modified_model_from_file(model, file_load=file)
-    #trte.fine_tune(model)
+    model_new = modify_model(model, cluster_id, temp_kernels)
 
-    trte.evaluate_model2(model)
+    print "start fine-tuneing"
+    #print "start testing"
+    evaluate_model(model)
+    #fine_tune_model(model, epochs=20)
+
 
 
 if __name__ == "__main__":
