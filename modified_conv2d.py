@@ -28,8 +28,6 @@ class ModifiedConv2D(Layer):
                  activity_regularizer=None,
                  kernel_constraint=None,
                  bias_constraint=None,
-                 template_tensor=None,
-                 clusterid=None,
                  **kwargs
                  ):
         super(ModifiedConv2D, self).__init__(**kwargs)
@@ -50,8 +48,6 @@ class ModifiedConv2D(Layer):
         self.kernel_constraint = constraints.get(kernel_constraint)
         self.bias_constraint = constraints.get(bias_constraint)
         self.input_spec = InputSpec(ndim=self.rank + 2)
-        self.template_tensor = template_tensor
-        self.clusterid = clusterid
 
     def build(self, input_shape):
         if self.data_format=='channels_first':
@@ -63,11 +59,6 @@ class ModifiedConv2D(Layer):
                              'should be defined. Found `None`.')
         input_dim = input_shape[channel_axis]
 
-        if self.clusterid.shape != (input_dim,self.filters):
-            raise ValueError('clusterid shape error'
-                             'should be ' + str(input_dim) + '*' + str(self.filters) + ' '
-                             'find' + str(self.clusterid.shape))
-
         self.kernel_num=input_dim*self.filters
 
         self.kernels_shape=self.kernel_size+(input_dim,self.filters)
@@ -77,21 +68,10 @@ class ModifiedConv2D(Layer):
                                name='A',
                                trainable=True)
 
-        for i in range(self.filters):  ##kernel num
-            for s in range(input_dim):
-
-                temp_id=self.clusterid[s,i]
-                temp=self.template_tensor[temp_id]
-                temp=tf.reshape(temp,(3,3,1,1))
-
-                if s == 0:
-                    temp_slice=temp
-                else:
-                    temp_slice = tf.concat([temp_slice,temp],2)
-            if i==0:
-                self.template = temp_slice
-            else:
-                self.template=tf.concat([self.template, temp_slice],3)
+        self.template=self.add_weight(shape=self.kernels_shape,
+                                      initializer=self.kernel_initializer,
+                                      name='template',
+                                      trainable=False)
 
         self.B=self.add_weight(shape=(input_dim,self.filters,),
                                initializer=self.kernel_initializer,
@@ -127,7 +107,6 @@ class ModifiedConv2D(Layer):
                 self.bias,
                 data_format=self.data_format
             )
-
 
         return outputs
 
@@ -183,26 +162,13 @@ if __name__ == "__main__":
     _IMAGE_DATA_FORMAT='channels_last'
 
     input_shape=(32,32,3)
-    cdata = np.array([[1, 1, 1, 1, 1, 1, 1, 1, 1],
-                      [2, 2, 2, 2, 2, 2, 2, 2, 2],
-                      [3, 3, 3, 3, 3, 3, 3, 3, 3],
-                      [4, 4, 4, 4, 4, 4, 4, 4, 4],
-                      [5, 5, 5, 5, 5, 5, 5, 5, 5]])
-
-    clusterid = np.random.randint(0, 5, size=(3, 16))
-
-
-    template = tf.Variable(cdata, name='template')
-
     layer1=ModifiedConv2D(filters=16,
                           kernel_size=(3,3),
                           strides=(1,1),
                           kernel_initializer="he_normal",
                           kernel_regularizer=l2(1e-4),
                           padding="same",
-                          data_format=_IMAGE_DATA_FORMAT,
-                          template_tensor=template,
-                          clusterid=clusterid)
+                          data_format=_IMAGE_DATA_FORMAT)
     layer1.build(input_shape)
     print layer1.compute_output_shape(input_shape)
     print layer1.A
@@ -215,3 +181,4 @@ if __name__ == "__main__":
     print np.array(weights[0]).shape
     print np.array(weights[1]).shape
     print np.array(weights[2]).shape
+    print np.array(weights[3]).shape

@@ -56,6 +56,8 @@ def modify_model(model, cluster_id, temp_kernels):
     set_cluster_weights_to_model(model, model_new,
                                  coef_a=coef_a,
                                  coef_b=coef_b,
+                                 clusterid=cluster_id,
+                                 cdata=temp_kernels,
                                  conv_layers_list=conv_layers_list)
 
 
@@ -166,7 +168,7 @@ def get_coefficients(kernels_array, clusterid, cdata):
 
     return coef_a, coef_b
 
-def set_cluster_weights_to_model(model, model_new, coef_a, coef_b,conv_layers_list):
+def set_cluster_weights_to_model(model, model_new, clusterid, cdata, coef_a, coef_b,conv_layers_list):
     kernel_id = 0
     for l in conv_layers_list:
         weights = model.layers[l].get_weights()
@@ -176,6 +178,10 @@ def set_cluster_weights_to_model(model, model_new, coef_a, coef_b,conv_layers_li
             for s in range(model.layers[l].input_shape[-1]):  # kernel depth
                 weights_new[0][s,i] = coef_a[kernel_id]
                 weights_new[1][s,i] = coef_b[kernel_id]
+
+                cent_id = clusterid[kernel_id]
+                cent = cdata[cent_id]
+                weights_new[3][:,:,s,i]=np.array(cent).reshape(filter_size, filter_size)  # HWCK
                 kernel_id += 1
 
         model_new.layers[l].set_weights(weights_new)
