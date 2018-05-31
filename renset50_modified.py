@@ -108,9 +108,9 @@ def ResNet50_Modified(include_top=True,
                       input_shape=None,
                       pooling=None,
                       classes=1000,
-                      template = None,
+                      temp = None,
                       clusterid=None):
-    template = tf.Variable(template, name='template', dtype='float32')
+    template = tf.Variable(temp, name='template', dtype='float32')
 
     # Determine proper input shape
     input_shape = _obtain_input_shape(input_shape,

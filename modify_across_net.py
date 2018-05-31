@@ -9,8 +9,8 @@ from keras.layers import Dense
 from termcolor import cprint
 from array import array
 
-from Bio import Cluster
 from renset50_modified import ResNet50_Modified
+from Bio.Cluster import distancematrix
 
 ####################################
 ##config params
@@ -20,37 +20,26 @@ d_thresh = 0
 
 ####################################
 ## public API
-def cluster_model_kernels(model, k=kmeans_k, t = 1):
-    # 1 get 3x3 conv layers
+def modify_across_net(model, temp_kernels, k):
     conv_layers_list = get_conv_layers_list(model)
     cprint("selected conv layers is:" + str(conv_layers_list), "red")
 
-    # 2 get kernels array
     kernels_array = get_kernels_array(model, conv_layers_list)
-    print "num of kernels:" + str(np.shape(kernels_array)[0])
 
-    # 3 get clusterid and temp
-    cluster_id, temp_kernels = cluster_kernels(kernels_array, k=k, times=t)
+    #cluster_id= get_clusterid(kernels_array, temp_kernels)
+    print 'link done'
 
-    return cluster_id, temp_kernels
+    #np.save("tmp/resnet50_vgg19_" + str(k) + "_clusterid.npy",cluster_id)
 
-def modify_model(model, cluster_id, temp_kernels):
-    # 1 get 3x3 conv layers
-    conv_layers_list = get_conv_layers_list(model)
-    cprint("selected conv layers is:" + str(conv_layers_list), "red")
+    cluster_id=np.load("tmp/resnet50_vgg19_" + str(k) + "_clusterid.npy")
 
-    # 2 get kernels array
-    kernels_array = get_kernels_array(model, conv_layers_list)
-    print "num of kernels:" + str(np.shape(kernels_array)[0])
-
-    # 3 get coefficient a
     coef_a, coef_b = get_coefficients(kernels_array, cluster_id, temp_kernels)
 
-    # 4 build modified model
     model_new = ResNet50_Modified(include_top=True,
                                   temp=temp_kernels,
                                   clusterid=cluster_id)
     print 'rebuilding model done'
+
 
     # 5 set new model weights
     set_cluster_weights_to_model(model, model_new,
@@ -60,25 +49,9 @@ def modify_model(model, cluster_id, temp_kernels):
                                  cdata=temp_kernels,
                                  conv_layers_list=conv_layers_list)
 
-
-    set_cluster_weights_to_old_model(model, cluster_id,temp_kernels,coef_a,coef_b,conv_layers_list)
+    set_cluster_weights_to_old_model(model, cluster_id, temp_kernels, coef_a, coef_b, conv_layers_list)
 
     return model_new
-
-def save_cluster_result(clusterid, temp, f):
-    f_clusterid = f + "_clusterid.npy"
-    f_temp = f + "_temp.npy"
-    np.save(f_clusterid, clusterid)
-    np.save(f_temp, temp)
-
-def load_cluster_result(f):
-    f_clusterid = f + "_clusterid.npy"
-    f_temp = f + "_temp.npy"
-    clusterid = np.load(f_clusterid)
-    temp = np.load(f_temp)
-
-    print 'loading cluster result done.'
-    return clusterid, temp
 
 
 ########################################
@@ -129,23 +102,35 @@ def least_square(datax, datay):
     a, b = np.polyfit(datax, datay, 1)  ##notice the direction: datay = a*datax + b
     return (a, b)
 
-def cluster_kernels(kernels_array, k=kmeans_k, times=1):
-    print "start clustering"
+def get_clusterid(kernels_array, cdata):
+    kernels_num = np.shape(kernels_array)[0]
+    temp_num = np.shape(cdata)[0]
+    clusterid = np.zeros(kernels_num)
 
-    clusterid = []
-    error_best = float('inf')
-    for i in range(times):
-        clusterid_single, error, nfound = Cluster.kcluster(kernels_array, nclusters=k, dist='a')
-        if error < error_best:
-            clusterid = clusterid_single
-            error_best = error
-    print 'error:', error_best
+    avg_sum = 0
+    for i in range(kernels_num):
+        kernel = kernels_array[i]
+        best_id=0
+        best_r=1000
+        for j in range(temp_num):
+            temp=cdata[j]
+            data = np.concatenate(([temp],[kernel]), axis=0)
+            matrix = distancematrix(data, dist='a')
+            r = matrix[1][0]
+            if r < best_r:
+                best_r = r
+                best_id = j
 
-    cdata, cmask = Cluster.clustercentroids(kernels_array, clusterid=clusterid, )
+        clusterid[i] = int(best_id)
+        avg_sum += best_r
 
-    print "end clustering"
+        if i%10000 == 0:
+            print i
+    avg = avg_sum / kernels_num
 
-    return clusterid, cdata
+    print "average r2:%6.4f" % (avg)
+
+    return clusterid
 
 def get_coefficients(kernels_array, clusterid, cdata):
     kernels_num = np.shape(kernels_array)[0]
@@ -154,7 +139,7 @@ def get_coefficients(kernels_array, clusterid, cdata):
 
     avg_sum = 0
     for i in range(kernels_num):
-        cent_id = clusterid[i]
+        cent_id = int(clusterid[i])
         kernel = kernels_array[i]
         cent = cdata[cent_id]
         a, b = least_square(cent, kernel)
@@ -168,6 +153,7 @@ def get_coefficients(kernels_array, clusterid, cdata):
 
     return coef_a, coef_b
 
+
 def set_cluster_weights_to_model(model, model_new, clusterid, cdata, coef_a, coef_b,conv_layers_list):
     kernel_id = 0
     for l in conv_layers_list:
@@ -179,7 +165,7 @@ def set_cluster_weights_to_model(model, model_new, clusterid, cdata, coef_a, coe
                 weights_new[0][s,i] = coef_a[kernel_id]
                 weights_new[1][s,i] = coef_b[kernel_id]
 
-                cent_id = clusterid[kernel_id]
+                cent_id = int(clusterid[kernel_id])
                 cent = cdata[cent_id]
                 weights_new[3][:,:,s,i]=np.array(cent).reshape(filter_size, filter_size)  # HWCK
                 kernel_id += 1
@@ -197,17 +183,13 @@ def set_cluster_weights_to_old_model(model, clusterid, cdata, coef_a, coef_b, co
         weights = model.layers[l].get_weights()
         for i in range(model.layers[l].filters):  ##kernel num
             for s in range(model.layers[l].input_shape[-1]):  # kernel depth
-                cent=clusterid[kernels_id]
+                cent=int(clusterid[kernels_id])
                 temp=cdata[cent]
                 a=coef_a[kernels_id]
                 b=coef_b[kernels_id]
                 weights[0][:, :, s, i] = np.array(a*temp+b).reshape(filter_size, filter_size)
                 kernels_id += 1
         model.layers[l].set_weights(weights)
-
-
-
-
 
 
 #####################################

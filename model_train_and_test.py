@@ -4,15 +4,14 @@ from termcolor import cprint
 from random import sample
 import itertools
 import threading
+import keras
 
 from keras.applications import imagenet_utils
 from keras.preprocessing import image
 from keras.applications.imagenet_utils import decode_predictions
 from keras.applications.imagenet_utils import preprocess_input
 from keras.utils import to_categorical
-from keras.preprocessing import image
 from keras.preprocessing.image import ImageDataGenerator
-from keras.layers.convolutional import Conv2D
 from keras.optimizers import Adam, SGD
 from keras.callbacks import ReduceLROnPlateau, CSVLogger, EarlyStopping, ModelCheckpoint, TensorBoard, LearningRateScheduler
 from keras.metrics import top_k_categorical_accuracy
@@ -59,8 +58,8 @@ def fine_tune_model(model, epochs = nb_epoch, batch_size = batch_size):
     lr_reducer = ReduceLROnPlateau(factor=np.sqrt(0.1), cooldown=0, patience=5, min_lr=0.5e-6)
     lr_scheduler = LearningRateScheduler(lr_fine_tune_schedule)
     early_stopper = EarlyStopping(min_delta=0.001, patience=10)
-    csv_logger = CSVLogger('./result/fine_tune_resnet50_imagenet.2048.2.csv')
-    ckpt = ModelCheckpoint(filepath="./weights/resnet50_fine_tune_weights.2048.2.{epoch:02d}.h5", monitor='loss', save_best_only=True,
+    csv_logger = CSVLogger('./result/fine_tune_resnet50_vgg19_imagenet.4096.csv')
+    ckpt = ModelCheckpoint(filepath="./weights/resnet50_vgg19_fine_tune_weights.4096.{epoch:02d}.h5", monitor='loss', save_best_only=True,
                            save_weights_only=True)
     tensorboard = TensorBoard(log_dir='./logs', histogram_freq=1, write_images=True)
     model.fit_generator(generator=training_data_gen(),
@@ -98,7 +97,7 @@ def acc_top5(y_true, y_pred):
 
 def training_data_gen():
     datagen = ImageDataGenerator(
-        channel_shift_range=0.1,
+        channel_shift_range=10,
         horizontal_flip=True,  # randomly flip images
 
         preprocessing_function=imagenet_utils.preprocess_input)
@@ -128,96 +127,38 @@ def evaluating_data_gen():
         shuffle=True)
 
     return img_generator
-'''
-
-class thread_safe_decorator:
-    def __init__(self, generator):
-        self.generator = generator
-        self.lock = threading.Lock()
-
-    def next(self):
-        with self.lock:
-            batch_data_list = self.generator.next()
-        imgs = get_evaluating_batch_imgs(batch_data_list)
-        labels = get_evaluating_image_labels(batch_data_list)
-        return imgs, labels
-
-
-def evaluating_data_gen():
-    def img_generator():
-
-        img_parent_dir = "/data1/datasets/imageNet/ILSVRC2016/ILSVRC/Data/CLS-LOC/"
-        img_dir = os.path.join(img_parent_dir, "val")
-        file_data_list = os.listdir(img_dir)
-        file_data_array = [file_data_list[i * evaluating_batch_size:(i + 1) * evaluating_batch_size] for i in
-                           range(len(file_data_list) / evaluating_batch_size)]
-        if debug_flag:
-            print len(file_data_array)
-            print file_data_array
-        iterator = itertools.cycle(file_data_array)
-        while (1):
-            batch_data_list = iterator.next()
-            yield batch_data_list
-
-    return thread_safe_decorator(img_generator())
-
-
-def get_evaluating_batch_imgs(batch_data_list):
-    img_parent_dir = "/data1/datasets/imageNet/ILSVRC2016/ILSVRC/Data/CLS-LOC/"
-    img_dir = os.path.join(img_parent_dir, "val")
-    img_array = np.empty(shape=(evaluating_batch_size, img_size, img_size, 3), dtype=float)
-
-    for index, i in enumerate(batch_data_list):
-        img_path = os.path.join(img_dir, i)
-        if debug_flag:
-            print img_path
-        img = image.load_img(img_path, target_size=(img_size, img_size))
-        img = image.img_to_array(img)
-        img = imagenet_utils.preprocess_input(img)  ##mobilenet uses its own way to preprocess images
-        img_array[index, ...] = img
-    return img_array
-
-
-def get_evaluating_image_labels(batch_data_list):
-    img_parent_dir = "/data1/datasets/imageNet/ILSVRC2016/ILSVRC/Annotations/CLS-LOC/"
-    img_dir = os.path.join(img_parent_dir, "val")
-    indice_array = np.empty(shape=(evaluating_batch_size, 1000), dtype=float)
-
-    for index, i in enumerate(batch_data_list):
-        i = i[:-4] + "xml"
-        file_name = os.path.join(img_dir, i)
-        digit_name = xml.etree.ElementTree.parse(file_name).getroot().findall("object")[0].findall("name")[0].text
-        indice = digit_indice_dict[digit_name]
-        indice = to_categorical(indice, num_classes=1000)
-        indice_array[index] = indice
-    return indice_array
-    '''
-
 
 def generate_digit_indice_dict():
     digit_indice_dict = {value[0]: int(key) for key, value in imagenet_utils.CLASS_INDEX.items()}
     return digit_indice_dict
 
+class LossHistory(keras.callbacks.Callback):
+    def on_train_begin(self, logs={}):
+        self.losses = []
+
+    def on_batch_end(self, batch, logs={}):
+        self.losses.append(logs.get('loss'))
+
+    def on_train_end(self, logs={}):
+        numpy_loss_history = np.array(self.losses)
+        np.savetxt("./result/fine_tune_loss_history.1024.txt", numpy_loss_history, delimiter=",")
+
 
 def lr_fine_tune_schedule(epoch):
-    lr = 1e-3
-    if epoch > 15:
+    lr = 1e-4
+    if epoch >= 8:
         lr *= sqrt(0.1)
-    if epoch > 10:
+    if epoch >= 5:
         lr *= sqrt(0.1)
-    if epoch > 5:
+    if epoch >= 3:
+        lr *= sqrt(0.1)
+    if epoch >= 1:
         lr *= sqrt(0.1)
     print('Learning rate: ', lr)
     return lr
 
 def lr_train_schedule(epoch):
-    lr = 1e-2
-    if epoch > 15:
-        lr *= sqrt(0.1)
-    if epoch > 10:
-        lr *= sqrt(0.1)
-    if epoch > 5:
-        lr *= sqrt(0.1)
+    lr = 1e-3*(sqrt(0.1)**epoch)
     print('Learning rate: ', lr)
     return lr
 
